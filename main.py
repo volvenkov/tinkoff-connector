@@ -38,7 +38,7 @@ if __name__ == "__main__":
 
     webhook_queue = multiprocessing.Queue()
 
-    bot = bot.Bot(cfg.account_name, cfg.tinkoff_token, webhook_queue)
+    bot = bot.Bot(cfg.account_name, cfg.tinkoff_token, cfg.currency, webhook_queue)
 
     bot.start()
 
