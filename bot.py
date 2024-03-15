@@ -1,14 +1,13 @@
 from tinkoff.invest import (OrderDirection, OrderType, StopOrderDirection, StopOrderType, StopOrderExpirationType,
-                            ExchangeOrderType, StopOrderStatusOption)
+                            ExchangeOrderType, StopOrderStatusOption, OrderExecutionReportStatus, OrderState)
+from tinkoff.invest.utils import decimal_to_quotation, money_to_decimal
 from tinkoff.invest import Client, Share, Future, Etf
-from tinkoff.invest.utils import decimal_to_quotation
 from collections import defaultdict
 from decimal import Decimal
 import threading
-import traceback
 import logging
+import typing
 import queue
-import uuid
 import time
 
 import tinkoff_utils as tu
@@ -43,6 +42,10 @@ class NothingToCloseException(Exception):
     pass
 
 
+class IllegalOrderStatusException(Exception):
+    pass
+
+
 class WebhookType(utils.BaseEnum):
     OPEN = "open"
     RENEW_STOP_LOSS = "renew_stop_loss"
@@ -59,10 +62,16 @@ class Bot:
                  account_name: str,
                  tinkoff_token: str,
                  currency: str,
+                 max_verify_attempts: int,
+                 verify_delay_s: float,
+                 send_msg: typing.Callable[[str], typing.Any],
                  webhook_queue: queue.Queue):
         self._account_name = account_name
         self._tinkoff_token = tinkoff_token
         self._currency = currency
+        self._max_verify_attempts = max_verify_attempts
+        self._verify_delay_s = verify_delay_s
+        self._send_msg = send_msg
         self._webhook_queue = webhook_queue
 
         self._account_id = None
@@ -71,8 +80,8 @@ class Bot:
 
         self._instruments_updater_thread = threading.Thread(target=self._instruments_updater)
 
-        self._instruments = {}
-        self._instruments_by_uid = {}
+        self._instruments: dict[str, dict[str, Future | Share | Etf]] = {}
+        self._instruments_by_uid: dict[str, Future | Share | Etf] = {}
         self._instruments_lock = threading.Lock()
 
         self._webhook_handler_thread = threading.Thread(target=self._webhook_handler)
@@ -118,10 +127,8 @@ class Bot:
                             instruments[item.ticker][item.currency] = item
 
                             instruments_by_uid[item.uid] = item
-            except Exception:
-                traceback.print_exc()
-
-                #  log in tg
+            except Exception as ex:
+                self._send_msg(f"❌ Error occurred during instrument list update: {ex.__class__.__name__} {ex}")
 
                 continue
 
@@ -134,15 +141,15 @@ class Bot:
     def _webhook_handler(self):
         while not self._stop_event.is_set():
             try:
-                self._on_webhook(self._webhook_queue.get(timeout=1))
+                msg = self._on_webhook(self._webhook_queue.get(timeout=1))
+
+                self._send_msg(msg)
             except queue.Empty:
                 continue
-            except Exception:
-                traceback.print_exc()
+            except Exception as ex:
+                self._send_msg(f"❌ Error occurred: {ex.__class__.__name__} {ex}")
 
-                #  log in tg
-
-    def _on_webhook(self, webhook_json: dict):
+    def _on_webhook(self, webhook_json: dict) -> str:
         webhook_type = WebhookType.value_of(webhook_json["type"])
 
         ticker = webhook_json["ticker"]
@@ -187,26 +194,41 @@ class Bot:
                     raise BalanceNonZeroException(
                         f"Balance for '{ticker}' '{self._currency}' non zero: {current_balance}!")
 
-                order_id = uuid.uuid4().hex[:16]
+                # if instrument.__class__.__name__ == Future.__name__:
+                #     print(client.users.get_margin_attributes(account_id=self._account_id))
+                #     # GetMarginAttributesResponse(liquid_portfolio=MoneyValue(currency='rub', units=493, nano=680000000), starting_margin=MoneyValue(currency='rub', units=443, nano=890000000), minimal_margin=MoneyValue(currency='rub', units=221, nano=950000000), funds_sufficiency_level=Quotation(units=1, nano=230000000), amount_of_missing_funds=MoneyValue(currency='rub', units=-49, nano=-790000000), corrected_margin=MoneyValue(currency='rub', units=443, nano=890000000))
+                #     response = client.instruments.get_futures_margin(figi=instrument.figi)  # replace to uid
+                #
+                #     initial_margin_on_buy, initial_margin_on_sell = money_to_decimal(response.initial_margin_on_buy), \
+                #         money_to_decimal(response.initial_margin_on_sell)
+                #
+                #     print(f"{initial_margin_on_buy * qty} {initial_margin_on_sell * qty}")
+                #
+                #     return ""
 
-                with Client(self._tinkoff_token) as client:
-                    response = client.orders.post_order(
-                        order_id=order_id,
-                        instrument_id=instrument.uid,
-                        quantity=qty,
-                        account_id=self._account_id,
-                        direction=OrderDirection.ORDER_DIRECTION_BUY if position_side == PositionSide.LONG
-                        else OrderDirection.ORDER_DIRECTION_SELL,
-                        order_type=OrderType.ORDER_TYPE_MARKET
-                    )
+                response = client.orders.post_order(
+                    instrument_id=instrument.uid,
+                    quantity=qty,
+                    account_id=self._account_id,
+                    direction=OrderDirection.ORDER_DIRECTION_BUY if position_side == PositionSide.LONG
+                    else OrderDirection.ORDER_DIRECTION_SELL,
+                    order_type=OrderType.ORDER_TYPE_MARKET
+                )
 
-                # wait order_id for execution
+                order_state = self._wait_till_status(client,
+                                                     response.order_id,
+                                                     OrderExecutionReportStatus.EXECUTION_REPORT_STATUS_FILL,
+                                                     [OrderExecutionReportStatus.EXECUTION_REPORT_STATUS_CANCELLED,
+                                                      OrderExecutionReportStatus.EXECUTION_REPORT_STATUS_REJECTED])
 
                 if tp_price:
                     self._place_tp(client, qty, instrument.uid, tp_price, position_side)
 
                 if sl_price:
                     self._place_sl(client, qty, instrument.uid, sl_price, position_side)
+
+                return f"✅ '{ticker}' '{self._currency}' position opened on price " \
+                       f"{money_to_decimal(order_state.executed_order_price)} | tp: {tp_price} | sl: {sl_price}"
         elif webhook_type == WebhookType.RENEW_STOP_LOSS:
             sl_price = Decimal(webhook_json["sl_price"])
             qty = int(webhook_json["qty"])
@@ -225,6 +247,8 @@ class Bot:
                                                          stop_order_id=stop_loss_order_id)
 
                 self._place_sl(client, qty, instrument.uid, sl_price, position_side)
+
+            return f"✅ '{ticker}' '{self._currency}' sl price changed to {sl_price} "
         elif webhook_type == WebhookType.CLOSE:
             with Client(self._tinkoff_token) as client:
                 response = client.stop_orders.get_stop_orders(account_id=self._account_id,
@@ -247,17 +271,63 @@ class Bot:
                     raise NothingToCloseException(
                         f"Nothing to close for '{ticker}' '{self._currency}', balance: {current_balance}!")
 
-                # close position
+                response = client.orders.post_order(
+                    instrument_id=instrument.uid,
+                    quantity=current_balance,
+                    account_id=self._account_id,
+                    direction=OrderDirection.ORDER_DIRECTION_SELL if position_side == PositionSide.LONG
+                    else OrderDirection.ORDER_DIRECTION_BUY,
+                    order_type=OrderType.ORDER_TYPE_MARKET
+                )
 
-    def _get_balance(self, client, instrument):
+                order_state = self._wait_till_status(
+                    client,
+                    response.order_id,
+                    OrderExecutionReportStatus.EXECUTION_REPORT_STATUS_FILL,
+                    [OrderExecutionReportStatus.EXECUTION_REPORT_STATUS_CANCELLED,
+                     OrderExecutionReportStatus.EXECUTION_REPORT_STATUS_REJECTED])
+
+                return f"✅ '{ticker}' '{self._currency}' position closed on price " \
+                       f"{money_to_decimal(order_state.executed_order_price)} | orders cancelled"
+
+    def _wait_till_status(self,
+                          client,
+                          order_id: str,
+                          required_order_status: OrderExecutionReportStatus,
+                          break_order_status: list[OrderExecutionReportStatus]) -> OrderState:
+        for i in range(self._max_verify_attempts):
+            order_status = None
+
+            try:
+                response = client.orders.get_order_state(account_id=self._account_id, order_id=order_id)
+
+                order_status = response.execution_report_status
+
+                if order_status in break_order_status:
+                    raise IllegalOrderStatusException(
+                        f"Illegal order status with id: {order_id}, {order_status.value}!")
+
+                if order_status == required_order_status:
+                    return response
+            except Exception:
+                pass
+
+            if i == self._max_verify_attempts - 1:
+                raise IllegalOrderStatusException(f"Illegal order status with id: {order_id}, {order_status.value}!")
+
+            time.sleep(self._verify_delay_s)
+
+    def _get_balance(self, client, instrument) -> int | None:
         positions = client.operations.get_positions(account_id=self._account_id)
 
         if instrument.__class__.__name__ in [Share.__name__, Etf.__name__]:
             positions = positions.securities
         elif instrument.__class__.__name__ == Future.__name__:
             positions = positions.futures
+        else:
+            return None
 
-        current_balance = None
+        current_balance = 0
 
         for position in positions:
             if position.instrument_uid == instrument.uid:
@@ -268,7 +338,7 @@ class Bot:
         return current_balance
 
     def _place_tp(self, client, qty: int, uid: str, price: Decimal, position_side: PositionSide):
-        client.stop_orders.post_stop_order(
+        return client.stop_orders.post_stop_order(
             quantity=qty,
             instrument_id=uid,
             price=decimal_to_quotation(price),
@@ -282,7 +352,7 @@ class Bot:
         )
 
     def _place_sl(self, client, qty: int, uid: str, price: Decimal, position_side: PositionSide):
-        client.stop_orders.post_stop_order(
+        return client.stop_orders.post_stop_order(
             quantity=qty,
             instrument_id=uid,
             price=decimal_to_quotation(price),

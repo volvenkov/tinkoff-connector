@@ -1,11 +1,14 @@
 import multiprocessing
 import logging
+
+import requests
 import urllib3
 import signal
 
 import server
 import bot
 import cfg
+import utils
 
 
 # bonds - облигации
@@ -20,6 +23,15 @@ def stop(_signal, _frame):
     wsm.stop()
 
     bot.stop()
+
+    session.close()
+
+
+def send_tg(msg: str):
+    try:
+        utils.send_tg(session, cfg.bot_token, cfg.chat_id, msg, "HTML", True)
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":
@@ -38,7 +50,15 @@ if __name__ == "__main__":
 
     webhook_queue = multiprocessing.Queue()
 
-    bot = bot.Bot(cfg.account_name, cfg.tinkoff_token, cfg.currency, webhook_queue)
+    session = requests.Session()
+
+    bot = bot.Bot(cfg.account_name,
+                  cfg.tinkoff_token,
+                  cfg.currency,
+                  cfg.max_verify_attempts,
+                  cfg.verify_delay_s,
+                  send_tg,
+                  webhook_queue)
 
     bot.start()
 
