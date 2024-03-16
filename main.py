@@ -29,7 +29,7 @@ def stop(_signal, _frame):
 
 def send_tg(msg: str):
     try:
-        utils.send_tg(session, cfg.bot_token, cfg.chat_id, msg, "HTML", True)
+        utils.send_tg(session, cfg.bot_token, cfg.chat_id, msg,  send_async=True)
     except Exception:
         pass
 
@@ -57,6 +57,7 @@ if __name__ == "__main__":
                   cfg.currency,
                   cfg.max_verify_attempts,
                   cfg.verify_delay_s,
+                  cfg.min_money_coefficient,
                   send_tg,
                   webhook_queue)
 

@@ -1,6 +1,6 @@
 from tinkoff.invest import (OrderDirection, OrderType, StopOrderDirection, StopOrderType, StopOrderExpirationType,
                             ExchangeOrderType, StopOrderStatusOption, OrderExecutionReportStatus, OrderState)
-from tinkoff.invest.utils import decimal_to_quotation, money_to_decimal
+from tinkoff.invest.utils import decimal_to_quotation, money_to_decimal, quotation_to_decimal
 from tinkoff.invest import Client, Share, Future, Etf
 from collections import defaultdict
 from decimal import Decimal
@@ -46,6 +46,10 @@ class IllegalOrderStatusException(Exception):
     pass
 
 
+class NotEnoughMoneyException(Exception):
+    pass
+
+
 class WebhookType(utils.BaseEnum):
     OPEN = "open"
     RENEW_STOP_LOSS = "renew_stop_loss"
@@ -64,6 +68,7 @@ class Bot:
                  currency: str,
                  max_verify_attempts: int,
                  verify_delay_s: float,
+                 min_money_coefficient: float | str,
                  send_msg: typing.Callable[[str], typing.Any],
                  webhook_queue: queue.Queue):
         self._account_name = account_name
@@ -71,6 +76,7 @@ class Bot:
         self._currency = currency
         self._max_verify_attempts = max_verify_attempts
         self._verify_delay_s = verify_delay_s
+        self._min_money_coefficient = Decimal(min_money_coefficient)
         self._send_msg = send_msg
         self._webhook_queue = webhook_queue
 
@@ -153,6 +159,9 @@ class Bot:
         webhook_type = WebhookType.value_of(webhook_json["type"])
 
         ticker = webhook_json["ticker"]
+
+        ticker = utils.reduce_year_from_string(ticker)
+
         position_side = PositionSide.value_of(webhook_json["position_side"])
 
         with self._instruments_lock:
@@ -194,17 +203,38 @@ class Bot:
                     raise BalanceNonZeroException(
                         f"Balance for '{ticker}' '{self._currency}' non zero: {current_balance}!")
 
-                # if instrument.__class__.__name__ == Future.__name__:
-                #     print(client.users.get_margin_attributes(account_id=self._account_id))
-                #     # GetMarginAttributesResponse(liquid_portfolio=MoneyValue(currency='rub', units=493, nano=680000000), starting_margin=MoneyValue(currency='rub', units=443, nano=890000000), minimal_margin=MoneyValue(currency='rub', units=221, nano=950000000), funds_sufficiency_level=Quotation(units=1, nano=230000000), amount_of_missing_funds=MoneyValue(currency='rub', units=-49, nano=-790000000), corrected_margin=MoneyValue(currency='rub', units=443, nano=890000000))
-                #     response = client.instruments.get_futures_margin(figi=instrument.figi)  # replace to uid
-                #
-                #     initial_margin_on_buy, initial_margin_on_sell = money_to_decimal(response.initial_margin_on_buy), \
-                #         money_to_decimal(response.initial_margin_on_sell)
-                #
-                #     print(f"{initial_margin_on_buy * qty} {initial_margin_on_sell * qty}")
-                #
-                #     return ""
+                print(quotation_to_decimal(instrument.min_price_increment))
+
+                if instrument.__class__.__name__ == Future.__name__:
+                    last_price = quotation_to_decimal(client.market_data.get_last_prices(
+                        instrument_id=[instrument.uid]).last_prices[0].price) / \
+                                 quotation_to_decimal(instrument.min_price_increment) * \
+                                 quotation_to_decimal(instrument.min_price_increment_amount)
+
+                    start_margin = \
+                        (quotation_to_decimal(instrument.dlong) if position_side == PositionSide.LONG else
+                         quotation_to_decimal(instrument.dshort)) * last_price * qty
+
+                    # response = client.instruments.get_futures_margin(figi=instrument.figi)
+                    #
+                    # initial_margin = \
+                    #     money_to_decimal(response.initial_margin_on_buy if position_side == PositionSide.LONG else
+                    #                      response.initial_margin_on_sell) * qty
+
+                    response = client.users.get_margin_attributes(account_id=self._account_id)
+
+                    account_start_margin = money_to_decimal(response.starting_margin)
+
+                    liquid_portfolio = money_to_decimal(response.liquid_portfolio)
+
+                    if account_start_margin + start_margin > liquid_portfolio * self._min_money_coefficient:
+                        raise NotEnoughMoneyException(
+                            f"'{ticker}' '{self._currency}' not enough money to open position.\n"
+                            f"Account start margin: {account_start_margin:.2f}.\n"
+                            f"Start margin: {start_margin:.2f}.\n"
+                            f"Liquid portfolio: {liquid_portfolio:.2f}\n"
+                            f"Potential new start margin: {account_start_margin + start_margin:.2f}/"
+                            f"{liquid_portfolio * self._min_money_coefficient:.2f}.\n")
 
                 response = client.orders.post_order(
                     instrument_id=instrument.uid,

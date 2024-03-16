@@ -2,6 +2,7 @@ from enum import Enum
 import traceback
 import threading
 import requests
+import re
 
 
 class BaseEnum(str, Enum):
@@ -46,3 +47,12 @@ def send_tg(session: requests.Session,
         threading.Thread(target=send_post_ss, args=(session, url, data)).start()
     else:
         return send_post_ss(session, url, data)
+
+
+def reduce_year_from_string(input_string):
+    matches = re.findall(r"\d{4}", input_string)
+
+    for match in matches:
+        input_string = input_string.replace(match, match[-1])
+
+    return input_string
