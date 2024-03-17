@@ -158,7 +158,12 @@ class Bot:
     def _on_webhook(self, webhook_json: dict) -> str:
         webhook_type = WebhookType.value_of(webhook_json["type"])
 
-        ticker = webhook_json["ticker"]
+        ticker = str(webhook_json["ticker"])
+
+        split_ticker = ticker.split(":")
+
+        if len(split_ticker) > 1:
+            ticker = split_ticker[1]
 
         ticker = utils.reduce_year_from_string(ticker)
 
@@ -183,11 +188,16 @@ class Bot:
         if webhook_type == WebhookType.OPEN:
             qty = int(webhook_json["qty"])
 
-            tp_price = Decimal(webhook_json["tp_price"]) if "tp_price" in webhook_json else None
-            sl_price = Decimal(webhook_json["sl_price"]) if "sl_price" in webhook_json else None
+            tick_size = quotation_to_decimal(instrument.min_price_increment)
+
+            tp_price = utils.round_price(Decimal(webhook_json["tp_price"]) * instrument.lot, tick_size) \
+                if "tp_price" in webhook_json else None
+            sl_price = utils.round_price(Decimal(webhook_json["sl_price"]) * instrument.lot, tick_size) \
+                if "sl_price" in webhook_json else None
 
             if qty % instrument.lot != 0:
-                qty = int(qty / instrument.lot) * instrument.lot
+                # qty = int(qty / instrument.lot) * instrument.lot
+                qty = int(qty / instrument.lot)
 
             if qty <= 0:
                 raise IllegalQtyException(f"Invalid quantity for '{ticker}' '{self._currency}': {qty}, "
@@ -203,38 +213,41 @@ class Bot:
                     raise BalanceNonZeroException(
                         f"Balance for '{ticker}' '{self._currency}' non zero: {current_balance}!")
 
-                print(quotation_to_decimal(instrument.min_price_increment))
-
                 if instrument.__class__.__name__ == Future.__name__:
                     last_price = quotation_to_decimal(client.market_data.get_last_prices(
                         instrument_id=[instrument.uid]).last_prices[0].price) / \
                                  quotation_to_decimal(instrument.min_price_increment) * \
                                  quotation_to_decimal(instrument.min_price_increment_amount)
+                else:
+                    last_price = quotation_to_decimal(client.market_data.get_last_prices(
+                        instrument_id=[instrument.uid]).last_prices[0].price) * instrument.lot
 
-                    start_margin = \
-                        (quotation_to_decimal(instrument.dlong) if position_side == PositionSide.LONG else
-                         quotation_to_decimal(instrument.dshort)) * last_price * qty
+                start_margin = \
+                    (quotation_to_decimal(instrument.dlong) if position_side == PositionSide.LONG else
+                     quotation_to_decimal(instrument.dshort)) * last_price * qty
 
-                    # response = client.instruments.get_futures_margin(figi=instrument.figi)
-                    #
-                    # initial_margin = \
-                    #     money_to_decimal(response.initial_margin_on_buy if position_side == PositionSide.LONG else
-                    #                      response.initial_margin_on_sell) * qty
+                # response = client.instruments.get_futures_margin(figi=instrument.figi)
+                #
+                # initial_margin = \
+                #     money_to_decimal(response.initial_margin_on_buy if position_side == PositionSide.LONG else
+                #                      response.initial_margin_on_sell) * qty
 
-                    response = client.users.get_margin_attributes(account_id=self._account_id)
+                response = client.users.get_margin_attributes(account_id=self._account_id)
 
-                    account_start_margin = money_to_decimal(response.starting_margin)
+                account_start_margin = money_to_decimal(response.starting_margin)
 
-                    liquid_portfolio = money_to_decimal(response.liquid_portfolio)
+                liquid_portfolio = money_to_decimal(response.liquid_portfolio)
 
-                    if account_start_margin + start_margin > liquid_portfolio * self._min_money_coefficient:
-                        raise NotEnoughMoneyException(
-                            f"'{ticker}' '{self._currency}' not enough money to open position.\n"
-                            f"Account start margin: {account_start_margin:.2f}.\n"
-                            f"Start margin: {start_margin:.2f}.\n"
-                            f"Liquid portfolio: {liquid_portfolio:.2f}\n"
-                            f"Potential new start margin: {account_start_margin + start_margin:.2f}/"
-                            f"{liquid_portfolio * self._min_money_coefficient:.2f}.\n")
+                new_account_start_margin = account_start_margin + start_margin
+
+                if account_start_margin + start_margin > liquid_portfolio * self._min_money_coefficient:
+                    raise NotEnoughMoneyException(
+                        f"'{ticker}' '{self._currency}' not enough money to open position.\n"
+                        f"Account start margin: {account_start_margin:.2f}.\n"
+                        f"Start margin: {start_margin:.2f}.\n"
+                        f"Liquid portfolio: {liquid_portfolio:.2f}\n"
+                        f"Potential new account start margin: ~{new_account_start_margin:.2f}/"
+                        f"{liquid_portfolio * self._min_money_coefficient:.2f}.\n")
 
                 response = client.orders.post_order(
                     instrument_id=instrument.uid,
@@ -258,7 +271,8 @@ class Bot:
                     self._place_sl(client, qty, instrument.uid, sl_price, position_side)
 
                 return f"✅ '{ticker}' '{self._currency}' position opened on price " \
-                       f"{money_to_decimal(order_state.executed_order_price)} | tp: {tp_price} | sl: {sl_price}"
+                       f"{money_to_decimal(order_state.executed_order_price)} | tp: {tp_price} | sl: {sl_price} | "\
+                       f"margin: {start_margin:.2f} | account start margin: ~{new_account_start_margin:.2f}"
         elif webhook_type == WebhookType.RENEW_STOP_LOSS:
             sl_price = Decimal(webhook_json["sl_price"])
             qty = int(webhook_json["qty"])

@@ -1,7 +1,9 @@
+from decimal import Decimal
 from enum import Enum
 import traceback
 import threading
 import requests
+import math
 import re
 
 
@@ -56,3 +58,12 @@ def reduce_year_from_string(input_string):
         input_string = input_string.replace(match, match[-1])
 
     return input_string
+
+
+def round_price(price: Decimal, tick_size: Decimal):
+    return round(math.floor(price / tick_size) * tick_size,
+                 len(decimal_to_string(tick_size).split('.')[1]))
+
+
+def decimal_to_string(val: Decimal):
+    return format(Decimal(str(val)), "f")
