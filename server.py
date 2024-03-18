@@ -8,6 +8,9 @@ import typing
 import queue
 import time
 
+import logger
+import cfg
+
 
 class WebhookServer:
     def __init__(self,
@@ -21,6 +24,7 @@ class WebhookServer:
         self._ssl_context = ssl_context
         self._ip_whitelist = ip_whitelist
         self._webhook_queue = webhook_queue
+        self._tg_logger = logger.TgLogger(cfg.bot_token, cfg.chat_id)
 
         self._ip_whitelist.append(self._ip)
 
@@ -33,8 +37,14 @@ class WebhookServer:
 
         @self._app.route("/webhook", methods=["POST"])
         def webhook():
-            webhook_queue.put(request.get_json())
+            try:
+                webhook_queue.put(request.get_json())
+            except Exception as ex:
+                traceback.print_exc()
 
+                self._tg_logger.send_tg(f"❌ Error occurred while decoding webhook: {ex.__class__.__name__} {ex}.\n"
+                                        f"Webhook: {request.get_data()}.\n"
+                                        f"Decoded webhook str: \n{request.get_data().decode('utf-8')}")
             return ""
 
         @self._app.route("/ping", methods=["GET", "POST"])

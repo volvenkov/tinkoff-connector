@@ -6,11 +6,11 @@ from collections import defaultdict
 from decimal import Decimal
 import threading
 import logging
-import typing
 import queue
 import time
 
 import tinkoff_utils as tu
+import logger
 import utils
 
 
@@ -69,7 +69,7 @@ class Bot:
                  max_verify_attempts: int,
                  verify_delay_s: float,
                  min_money_coefficient: float | str,
-                 send_msg: typing.Callable[[str], typing.Any],
+                 tg_logger: logger.TgLogger,
                  webhook_queue: queue.Queue):
         self._account_name = account_name
         self._tinkoff_token = tinkoff_token
@@ -77,7 +77,7 @@ class Bot:
         self._max_verify_attempts = max_verify_attempts
         self._verify_delay_s = verify_delay_s
         self._min_money_coefficient = Decimal(min_money_coefficient)
-        self._send_msg = send_msg
+        self._tg_logger = tg_logger
         self._webhook_queue = webhook_queue
 
         self._account_id = None
@@ -134,7 +134,7 @@ class Bot:
 
                             instruments_by_uid[item.uid] = item
             except Exception as ex:
-                self._send_msg(f"❌ Error occurred during instrument list update: {ex.__class__.__name__} {ex}")
+                self._tg_logger.send_tg(f"❌ Error occurred during instrument list update: {ex.__class__.__name__} {ex}")
 
                 time.sleep(60)
 
@@ -151,11 +151,11 @@ class Bot:
             try:
                 msg = self._on_webhook(self._webhook_queue.get(timeout=1))
 
-                self._send_msg(msg)
+                self._tg_logger.send_tg(msg)
             except queue.Empty:
                 continue
             except Exception as ex:
-                self._send_msg(f"❌ Error occurred: {ex.__class__.__name__} {ex}")
+                self._tg_logger.send_tg(f"❌ Error occurred: {ex.__class__.__name__} {ex}")
 
     def _on_webhook(self, webhook_json: dict) -> str:
         webhook_type = WebhookType.value_of(webhook_json["type"])

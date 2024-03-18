@@ -1,10 +1,10 @@
 import multiprocessing
-import logging
-
 import requests
+import logging
 import urllib3
 import signal
 
+import logger
 import server
 import bot
 import cfg
@@ -24,14 +24,7 @@ def stop(_signal, _frame):
 
     bot.stop()
 
-    session.close()
-
-
-def send_tg(msg: str):
-    try:
-        utils.send_tg(session, cfg.bot_token, cfg.chat_id, msg,  send_async=True)
-    except Exception:
-        pass
+    tg_logger.close()
 
 
 if __name__ == "__main__":
@@ -50,7 +43,7 @@ if __name__ == "__main__":
 
     webhook_queue = multiprocessing.Queue()
 
-    session = requests.Session()
+    tg_logger = logger.TgLogger(cfg.bot_token, cfg.chat_id)
 
     bot = bot.Bot(cfg.account_name,
                   cfg.tinkoff_token,
@@ -58,7 +51,7 @@ if __name__ == "__main__":
                   cfg.max_verify_attempts,
                   cfg.verify_delay_s,
                   cfg.min_money_coefficient,
-                  send_tg,
+                  tg_logger,
                   webhook_queue)
 
     bot.start()
