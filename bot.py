@@ -197,9 +197,10 @@ class Bot:
             sl_price = utils.round_price(Decimal(webhook_json["sl_price"]) * instrument.lot, tick_size) \
                 if "sl_price" in webhook_json else None
 
-            if qty % instrument.lot != 0:
-                # qty = int(qty / instrument.lot) * instrument.lot
-                qty = int(qty / instrument.lot)
+            # if qty % instrument.lot != 0:
+            #     qty = int(qty / instrument.lot) * instrument.lot
+
+            qty = int(qty / instrument.lot)
 
             if qty <= 0:
                 raise IllegalQtyException(f"Invalid quantity for '{ticker}' '{self._currency}': {qty}, "

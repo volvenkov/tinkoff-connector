@@ -6,6 +6,7 @@ import requests
 import logging
 import typing
 import queue
+import json
 import time
 
 import logger
@@ -37,14 +38,16 @@ class WebhookServer:
 
         @self._app.route("/webhook", methods=["POST"])
         def webhook():
+            data = request.get_data().decode("utf-8")
+
             try:
-                webhook_queue.put(request.get_json())
+                webhook_queue.put(json.loads(data))
             except Exception as ex:
                 traceback.print_exc()
 
                 self._tg_logger.send_tg(f"❌ Error occurred while decoding webhook: {ex.__class__.__name__} {ex}.\n"
                                         f"Webhook: {request.get_data()}.\n"
-                                        f"Decoded webhook str: \n{request.get_data().decode('utf-8')}")
+                                        f"Decoded webhook str: \n{data}")
             return ""
 
         @self._app.route("/ping", methods=["GET", "POST"])
