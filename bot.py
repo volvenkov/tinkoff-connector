@@ -136,6 +136,8 @@ class Bot:
             except Exception as ex:
                 self._send_msg(f"❌ Error occurred during instrument list update: {ex.__class__.__name__} {ex}")
 
+                time.sleep(60)
+
                 continue
 
             with self._instruments_lock:
