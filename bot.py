@@ -191,15 +191,15 @@ class Bot:
                 f"Unsupported position side for {instrument.__class__.__name__} '{ticker}' '{self._currency}': "
                 f"{position_side.value}!")
 
+        tick_size = quotation_to_decimal(instrument.min_price_increment)
+
+        tp_price = utils.round_price(Decimal(webhook_json["tp_price"]) * instrument.lot, tick_size) \
+            if "tp_price" in webhook_json else None
+        sl_price = utils.round_price(Decimal(webhook_json["sl_price"]) * instrument.lot, tick_size) \
+            if "sl_price" in webhook_json else None
+
         if webhook_type == WebhookType.OPEN:
             qty = int(webhook_json["qty"])
-
-            tick_size = quotation_to_decimal(instrument.min_price_increment)
-
-            tp_price = utils.round_price(Decimal(webhook_json["tp_price"]) * instrument.lot, tick_size) \
-                if "tp_price" in webhook_json else None
-            sl_price = utils.round_price(Decimal(webhook_json["sl_price"]) * instrument.lot, tick_size) \
-                if "sl_price" in webhook_json else None
 
             # if qty % instrument.lot != 0:
             #     qty = int(qty / instrument.lot) * instrument.lot
@@ -281,7 +281,6 @@ class Bot:
                        f"{money_to_decimal(order_state.executed_order_price)} | tp: {tp_price} | sl: {sl_price} | "\
                        f"margin: {start_margin:.2f} | account start margin: ~{new_account_start_margin:.2f}"
         elif webhook_type == WebhookType.RENEW_STOP_LOSS:
-            sl_price = Decimal(webhook_json["sl_price"])
             # qty = int(webhook_json["qty"])
 
             with Client(self._tinkoff_token) as client:
