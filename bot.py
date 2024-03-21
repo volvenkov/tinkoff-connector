@@ -26,6 +26,10 @@ class BalanceNonZeroException(Exception):
     pass
 
 
+class NothingToRenewStopLossException(Exception):
+    pass
+
+
 class BalanceNotFoundException(Exception):
     pass
 
@@ -278,9 +282,18 @@ class Bot:
                        f"margin: {start_margin:.2f} | account start margin: ~{new_account_start_margin:.2f}"
         elif webhook_type == WebhookType.RENEW_STOP_LOSS:
             sl_price = Decimal(webhook_json["sl_price"])
-            qty = int(webhook_json["qty"])
+            # qty = int(webhook_json["qty"])
 
             with Client(self._tinkoff_token) as client:
+                current_balance = self._get_balance(client, instrument)
+
+                if current_balance is None:
+                    raise BalanceNotFoundException(f"Balance for '{ticker}' '{self._currency}' not found!")
+
+                if current_balance != 0:
+                    raise NothingToRenewStopLossException(
+                        f"Canʼt renew stop loss, balance for '{ticker}' '{self._currency}': {current_balance}!")
+
                 response = client.stop_orders.get_stop_orders(account_id=self._account_id,
                                                               status=StopOrderStatusOption.STOP_ORDER_STATUS_ACTIVE)
 
@@ -293,7 +306,7 @@ class Bot:
                     client.stop_orders.cancel_stop_order(account_id=self._account_id,
                                                          stop_order_id=stop_loss_order_id)
 
-                self._place_sl(client, qty, instrument.uid, sl_price, position_side)
+                self._place_sl(client, current_balance, instrument.uid, sl_price, position_side)
 
             return f"✅ '{ticker}' '{self._currency}' sl price changed to {sl_price} "
         elif webhook_type == WebhookType.CLOSE:
