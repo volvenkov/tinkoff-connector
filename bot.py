@@ -289,7 +289,7 @@ class Bot:
                 if current_balance is None:
                     raise BalanceNotFoundException(f"Balance for '{ticker}' '{self._currency}' not found!")
 
-                if current_balance != 0:
+                if current_balance == 0:
                     raise NothingToRenewStopLossException(
                         f"Canʼt renew stop loss, balance for '{ticker}' '{self._currency}': {current_balance}!")
 
