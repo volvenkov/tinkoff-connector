@@ -284,7 +284,7 @@ class Bot:
             # qty = int(webhook_json["qty"])
 
             with Client(self._tinkoff_token) as client:
-                current_balance = self._get_balance(client, instrument)
+                current_balance = int(self._get_balance(client, instrument))
 
                 if current_balance is None:
                     raise BalanceNotFoundException(f"Balance for '{ticker}' '{self._currency}' not found!")
@@ -305,7 +305,7 @@ class Bot:
                     client.stop_orders.cancel_stop_order(account_id=self._account_id,
                                                          stop_order_id=stop_loss_order_id)
 
-                self._place_sl(client, current_balance, instrument.uid, sl_price, position_side)
+                self._place_sl(client, abs(current_balance), instrument.uid, sl_price, position_side)
 
             return f"✅ '{ticker}' '{self._currency}' sl price changed to {sl_price} "
         elif webhook_type == WebhookType.CLOSE:
@@ -332,7 +332,7 @@ class Bot:
 
                 response = client.orders.post_order(
                     instrument_id=instrument.uid,
-                    quantity=current_balance,
+                    quantity=abs(current_balance),
                     account_id=self._account_id,
                     direction=OrderDirection.ORDER_DIRECTION_SELL if position_side == PositionSide.LONG
                     else OrderDirection.ORDER_DIRECTION_BUY,
