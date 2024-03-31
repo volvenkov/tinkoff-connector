@@ -1,3 +1,4 @@
+import traceback
 import requests
 import utils
 
@@ -16,4 +17,15 @@ class TgLogger:
         try:
             utils.send_tg(self._session, self._bot_token, self._chat_id, msg, send_async=True)
         except Exception:
+            traceback.print_exc()
             pass
+
+    def send_tg_doc(self, caption: str, filename: str):
+        try:
+            with open(filename, "rb") as file:
+                file_content = file.read()
+
+            utils.send_document(self._session, self._bot_token, self._chat_id, file_content, filename, caption)
+        except Exception:
+            traceback.print_exc()
+

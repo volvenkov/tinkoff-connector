@@ -8,7 +8,6 @@ import logger
 import server
 import bot
 import cfg
-import utils
 
 
 # bonds - облигации
@@ -51,6 +50,10 @@ if __name__ == "__main__":
                   cfg.max_verify_attempts,
                   cfg.verify_delay_s,
                   cfg.min_money_coefficient,
+                  cfg.tickers_filename,
+                  cfg.log_step_perc,
+                  cfg.windows_str,
+                  cfg.stats_hour,
                   tg_logger,
                   webhook_queue)
 

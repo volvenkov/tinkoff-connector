@@ -2,13 +2,18 @@ from tinkoff.invest import (OrderDirection, OrderType, StopOrderDirection, StopO
                             ExchangeOrderType, StopOrderStatusOption, OrderExecutionReportStatus, OrderState)
 from tinkoff.invest.utils import decimal_to_quotation, money_to_decimal, quotation_to_decimal
 from tinkoff.invest import Client, Share, Future, Etf
+from xml.etree import ElementTree as ET
+from datetime import datetime as dt, timezone
 from collections import defaultdict
 from decimal import Decimal
 import threading
+import requests
 import logging
 import queue
 import time
+import pytz
 
+import cfg
 import tinkoff_utils as tu
 import logger
 import utils
@@ -73,6 +78,10 @@ class Bot:
                  max_verify_attempts: int,
                  verify_delay_s: float,
                  min_money_coefficient: float | str,
+                 tickers_filename: str,
+                 log_step_perc: float,
+                 windows_str: list[str],
+                 stats_hour: int,
                  tg_logger: logger.TgLogger,
                  webhook_queue: queue.Queue):
         self._account_name = account_name
@@ -81,6 +90,10 @@ class Bot:
         self._max_verify_attempts = max_verify_attempts
         self._verify_delay_s = verify_delay_s
         self._min_money_coefficient = Decimal(min_money_coefficient)
+        self._tickers_filename = tickers_filename
+        self._log_step_perc = log_step_perc
+        self._windows_str = windows_str
+        self._stats_hour = stats_hour
         self._tg_logger = tg_logger
         self._webhook_queue = webhook_queue
 
@@ -90,11 +103,16 @@ class Bot:
 
         self._instruments_updater_thread = threading.Thread(target=self._instruments_updater)
 
+        self._initial_margins_retriever_thread = threading.Thread(target=self._initial_margins_retriever)
+
         self._instruments: dict[str, dict[str, Future | Share | Etf]] = {}
         self._instruments_by_uid: dict[str, Future | Share | Etf] = {}
         self._instruments_lock = threading.Lock()
 
         self._webhook_handler_thread = threading.Thread(target=self._webhook_handler)
+
+        self._prev_initial_margins: dict | None = {}
+        self._prev_initial_margins_update_day: int | None = None
 
     def start(self):
         with Client(self._tinkoff_token) as client:
@@ -107,22 +125,29 @@ class Bot:
 
         self._instruments_updater_thread.start()
 
+        self._initial_margins_retriever_thread.start()
+
         self._webhook_handler_thread.start()
 
     def stop(self):
         self._stop_event.set()
 
-        logging.info(f"Starting to stop bot...")
+        logging.info("Starting to stop bot...")
 
         if self._webhook_handler_thread.is_alive():
             self._webhook_handler_thread.join()
 
-        logging.info(f"Webhook handler stopped.")
+        logging.info("Webhook handler stopped.")
 
         if self._instruments_updater_thread.is_alive():
             self._instruments_updater_thread.join()
 
-        logging.info(f"Instruments updater stopped.")
+        logging.info("Instruments updater stopped.")
+
+        if self._initial_margins_retriever_thread.is_alive():
+            self._initial_margins_retriever_thread.join()
+
+        logging.info("Initial margins retriever stopped.")
 
     def _instruments_updater(self):
         while not self._stop_event.is_set():
@@ -153,13 +178,33 @@ class Bot:
     def _webhook_handler(self):
         while not self._stop_event.is_set():
             try:
-                msg = self._on_webhook(self._webhook_queue.get(timeout=1))
+                data = self._webhook_queue.get(timeout=1)
 
-                self._tg_logger.send_tg(msg)
+                current_time = dt.now(pytz.utc)
+
+                within_window, window_end = utils.is_within_time_window(current_time,
+                                                                        utils.get_utc_time_windows(self._windows_str))
+
+                if not within_window:
+                    msg = self._on_webhook(data)
+
+                    self._tg_logger.send_tg(msg)
+                else:
+                    time_to_wait = (window_end - current_time).total_seconds()
+
+                    threading.Thread(target=self._handle_delayed_message, args=(data, time_to_wait)).start()
             except queue.Empty:
                 continue
             except Exception as ex:
                 self._tg_logger.send_tg(f"❌ Error occurred: {ex.__class__.__name__} {ex}")
+
+    def _handle_delayed_message(self, data, time_to_wait):
+        logging.info(f"Waiting {time_to_wait} for {data}")
+
+        if time_to_wait > 0:
+            time.sleep(time_to_wait)
+
+        self._webhook_queue.put(data)
 
     def _on_webhook(self, webhook_json: dict) -> str:
         webhook_type = WebhookType.value_of(webhook_json["type"])
@@ -172,6 +217,8 @@ class Bot:
             ticker = split_ticker[1]
 
         ticker = utils.reduce_year_from_string(ticker)
+
+        utils.add_to_set(self._tickers_filename, ticker)
 
         position_side = PositionSide.value_of(webhook_json["position_side"])
 
@@ -277,7 +324,8 @@ class Bot:
                 if sl_price:
                     self._place_sl(client, qty, instrument.uid, sl_price, position_side)
 
-                return f"✅ '{ticker}' '{self._currency}' position opened on price " \
+                return f"✅ '{ticker}' {instrument.__class__.__name__} '{self._currency}' {position_side.value} "\
+                       f"position opened on price " \
                        f"{money_to_decimal(order_state.executed_order_price)} | tp: {tp_price} | sl: {sl_price} | "\
                        f"margin: {start_margin:.2f} | account start margin: ~{new_account_start_margin:.2f}"
         elif webhook_type == WebhookType.RENEW_STOP_LOSS:
@@ -307,7 +355,8 @@ class Bot:
 
                 self._place_sl(client, abs(current_balance), instrument.uid, sl_price, position_side)
 
-            return f"✅ '{ticker}' '{self._currency}' sl price changed to {sl_price} "
+            return f"✅ '{ticker}' {instrument.__class__.__name__} '{self._currency}' {position_side.value} "\
+                   f"sl price changed to {sl_price} "
         elif webhook_type == WebhookType.CLOSE:
             with Client(self._tinkoff_token) as client:
                 response = client.stop_orders.get_stop_orders(account_id=self._account_id,
@@ -346,7 +395,8 @@ class Bot:
                     [OrderExecutionReportStatus.EXECUTION_REPORT_STATUS_CANCELLED,
                      OrderExecutionReportStatus.EXECUTION_REPORT_STATUS_REJECTED])
 
-                return f"✅ '{ticker}' '{self._currency}' position closed on price " \
+                return f"✅ '{ticker}' {instrument.__class__.__name__} '{self._currency}' {position_side.value} "\
+                       f"position closed on price " \
                        f"{money_to_decimal(order_state.executed_order_price)} | orders cancelled"
 
     def _wait_till_status(self,
@@ -423,3 +473,82 @@ class Bot:
             stop_order_type=StopOrderType.STOP_ORDER_TYPE_STOP_LOSS,
             exchange_order_type=ExchangeOrderType.EXCHANGE_ORDER_TYPE_MARKET,
         )
+
+    def _initial_margins_retriever(self):
+        is_initial = True
+
+        while not self._stop_event.is_set():
+            try:
+                tickers = utils.get_all_elements(cfg.tickers_filename)
+
+                curr_initial_margins = {
+                    ticker: initial_margin for ticker, initial_margin in self._retrieve_initial_margins().items()
+                    if ticker in tickers
+                }
+
+                curr_dt = dt.now(timezone.utc)
+
+                if self._prev_initial_margins is None or self._prev_initial_margins_update_day is None:
+                    self._prev_initial_margins = curr_initial_margins
+                    self._prev_initial_margins_update_day = curr_dt.day
+
+                    if curr_dt.hour > self._stats_hour:
+                        is_initial = False
+                else:
+                    for ticker, initial_margin in curr_initial_margins.items():
+                        if ticker not in self._prev_initial_margins:
+                            self._prev_initial_margins[ticker] = initial_margin
+
+                if (is_initial or curr_dt != self._prev_initial_margins_update_day) and \
+                        curr_dt.hour > self._stats_hour:
+                    is_initial = False
+
+                    sorted_stats = \
+                        dict(sorted({ticker: ((curr_initial_margins[ticker] - self._prev_initial_margins[ticker]) /
+                                              self._prev_initial_margins[ticker]) * 100
+                                     for ticker in set(self._prev_initial_margins) & set(curr_initial_margins)}.items(),
+                                    key=lambda item: abs(item[1]),
+                                    reverse=True))
+
+                    logging.info(f"Stats 24h: {sorted_stats}")
+
+                    if len(sorted_stats) <= 5:
+                        self._tg_logger.send_tg("Stats 24h\n" + "\n".join(f"{k}: {v}" for k, v in sorted_stats.items()))
+                    else:
+                        filename = "stats.txt"
+
+                        with open(filename, "w", encoding="utf-8") as f:
+                            f.write("\n".join(f"{k}={v}" for k, v in sorted_stats.items()))
+
+                        self._tg_logger.send_tg_doc("Stats 24h", filename)
+
+                    self._prev_initial_margins = curr_initial_margins
+
+                    self._prev_initial_margins_update_day = curr_dt.day
+
+            except Exception as ex:
+                self._tg_logger.send_tg(f"❌ Error occurred during initial margin update: {ex.__class__.__name__} {ex}")
+
+                time.sleep(60)
+
+                continue
+
+            logging.info("Initial margins successfully retrieved.")
+
+            time.sleep(60)
+
+    @staticmethod
+    def _retrieve_initial_margins() -> dict[str, Decimal]:
+        response = requests.get("http://moex.com/export/derivatives/go.aspx?type=F", timeout=10)
+
+        tree = ET.fromstring(response.content)
+        data = {}
+
+        for item in tree.iter("item"):
+            symbol = item.get("symbol")
+
+            initial_margin = Decimal(item.get("initial_margin"))
+
+            data[symbol] = initial_margin
+
+        return data
