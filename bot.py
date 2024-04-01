@@ -336,7 +336,7 @@ class Bot:
                 else:
                     executed_price = money_to_decimal(order_state.executed_order_price)
 
-                return f"✅ '{ticker}' {instrument.__class__.__name__} '{self._currency}' {position_side.value} "\
+                return f"✅ '{ticker}' {instrument.name} '{self._currency}' {position_side.value} "\
                        f"position opened on price " \
                        f"{executed_price} | lots: {order_state.lots_executed} | tp: {tp_price} | sl: {sl_price} | "\
                        f"margin: {start_margin:.2f} | account start margin: ~{new_account_start_margin:.2f}\n"\
@@ -366,7 +366,7 @@ class Bot:
 
                 self._place_sl(client, abs(current_balance), instrument.uid, sl_price, position_side)
 
-            return f"✅ '{ticker}' {instrument.__class__.__name__} '{self._currency}' {position_side.value} "\
+            return f"✅ '{ticker}' {instrument.name} '{self._currency}' {position_side.value} "\
                    f"sl price changed to {sl_price} \n"\
                     f"{webhook_json.get('comment', '')}"
         elif webhook_type == WebhookType.CLOSE:
@@ -414,7 +414,7 @@ class Bot:
                 else:
                     executed_price = money_to_decimal(order_state.executed_order_price)
 
-                return f"✅ '{ticker}' {instrument.__class__.__name__} '{self._currency}' {position_side.value} "\
+                return f"✅ '{ticker}' {instrument.name} '{self._currency}' {position_side.value} "\
                        f"position closed on price " \
                        f"{executed_price} | lots: {order_state.lots_executed} | orders cancelled\n"\
                        f"{webhook_json.get('comment', '')}"
@@ -525,7 +525,7 @@ class Bot:
                         if curr_initial_margin is None:
                             continue
 
-                        dev_perc = (curr_initial_margin - initial_margin) / is_initial * 100
+                        dev_perc = (curr_initial_margin - initial_margin) / initial_margin * 100
                         prev_alert_dev_perc = self._prev_initial_margins_alerts.get(ticker, None)
 
                         if abs(dev_perc) >= self._log_step_perc and \
@@ -536,7 +536,7 @@ class Bot:
                             self._tg_logger.send_tg(
                                 f"Initial margin: {ticker} {initial_margin} -> {curr_initial_margin} | {dev_perc}%")
 
-                if (is_initial or curr_dt != self._prev_initial_margins_update_day) and \
+                if (is_initial or curr_dt.day != self._prev_initial_margins_update_day) and \
                         curr_dt.hour > self._stats_hour:
                     is_initial = False
 
