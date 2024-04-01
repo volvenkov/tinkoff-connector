@@ -338,7 +338,7 @@ class Bot:
 
                 return f"✅ '{ticker}' {instrument.__class__.__name__} '{self._currency}' {position_side.value} "\
                        f"position opened on price " \
-                       f"{executed_price} | tp: {tp_price} | sl: {sl_price} | "\
+                       f"{executed_price} | lots: {order_state.lots_executed} | tp: {tp_price} | sl: {sl_price} | "\
                        f"margin: {start_margin:.2f} | account start margin: ~{new_account_start_margin:.2f}\n"\
                        f"{webhook_json.get('comment', '')}"
         elif webhook_type == WebhookType.RENEW_STOP_LOSS:
@@ -416,7 +416,7 @@ class Bot:
 
                 return f"✅ '{ticker}' {instrument.__class__.__name__} '{self._currency}' {position_side.value} "\
                        f"position closed on price " \
-                       f"{executed_price} | orders cancelled\n"\
+                       f"{executed_price} | lots: {order_state.lots_executed} | orders cancelled\n"\
                        f"{webhook_json.get('comment', '')}"
 
     def _wait_till_status(self,
