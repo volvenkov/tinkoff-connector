@@ -113,6 +113,7 @@ class Bot:
 
         self._prev_initial_margins: dict | None = {}
         self._prev_initial_margins_update_day: int | None = None
+        self._prev_initial_margins_alerts: dict[str, Decimal] = {}
 
     def start(self):
         with Client(self._tinkoff_token) as client:
@@ -251,7 +252,11 @@ class Bot:
             # if qty % instrument.lot != 0:
             #     qty = int(qty / instrument.lot) * instrument.lot
 
-            qty = int(qty / instrument.lot)
+            if instrument.__class__.__name__ == Future.__name__:
+                qty = int(qty / instrument.lot / float(quotation_to_decimal(instrument.min_price_increment_amount)) *
+                          float(tick_size))
+            else:
+                qty = int(qty / instrument.lot)
 
             if qty <= 0:
                 raise IllegalQtyException(f"Invalid quantity for '{ticker}' '{self._currency}': {qty}, "
@@ -327,10 +332,9 @@ class Bot:
                 return f"✅ '{ticker}' {instrument.__class__.__name__} '{self._currency}' {position_side.value} "\
                        f"position opened on price " \
                        f"{money_to_decimal(order_state.executed_order_price)} | tp: {tp_price} | sl: {sl_price} | "\
-                       f"margin: {start_margin:.2f} | account start margin: ~{new_account_start_margin:.2f}"
+                       f"margin: {start_margin:.2f} | account start margin: ~{new_account_start_margin:.2f}\n"\
+                       f"{webhook_json.get('comment', '')}"
         elif webhook_type == WebhookType.RENEW_STOP_LOSS:
-            # qty = int(webhook_json["qty"])
-
             with Client(self._tinkoff_token) as client:
                 current_balance = int(self._get_balance(client, instrument))
 
@@ -356,7 +360,8 @@ class Bot:
                 self._place_sl(client, abs(current_balance), instrument.uid, sl_price, position_side)
 
             return f"✅ '{ticker}' {instrument.__class__.__name__} '{self._currency}' {position_side.value} "\
-                   f"sl price changed to {sl_price} "
+                   f"sl price changed to {sl_price} \n"\
+                    f"{webhook_json.get('comment', '')}"
         elif webhook_type == WebhookType.CLOSE:
             with Client(self._tinkoff_token) as client:
                 response = client.stop_orders.get_stop_orders(account_id=self._account_id,
@@ -397,7 +402,8 @@ class Bot:
 
                 return f"✅ '{ticker}' {instrument.__class__.__name__} '{self._currency}' {position_side.value} "\
                        f"position closed on price " \
-                       f"{money_to_decimal(order_state.executed_order_price)} | orders cancelled"
+                       f"{money_to_decimal(order_state.executed_order_price)} | orders cancelled\n"\
+                       f"{webhook_json.get('comment', '')}"
 
     def _wait_till_status(self,
                           client,
@@ -499,9 +505,28 @@ class Bot:
                         if ticker not in self._prev_initial_margins:
                             self._prev_initial_margins[ticker] = initial_margin
 
+                    for ticker, initial_margin in self._prev_initial_margins.items():
+                        curr_initial_margin = curr_initial_margins.get(ticker, None)
+
+                        if curr_initial_margin is None:
+                            continue
+
+                        dev_perc = (curr_initial_margin - initial_margin) / is_initial * 100
+                        prev_alert_dev_perc = self._prev_initial_margins_alerts.get(ticker, None)
+
+                        if abs(dev_perc) >= self._log_step_perc and \
+                                (prev_alert_dev_perc is None or
+                                 abs(abs(prev_alert_dev_perc) - abs(dev_perc)) >= self._log_step_perc):
+                            self._prev_initial_margins_alerts[ticker] = dev_perc
+
+                            self._tg_logger.send_tg(
+                                f"Initial margin: {ticker} {initial_margin} -> {curr_initial_margin} | {dev_perc}%")
+
                 if (is_initial or curr_dt != self._prev_initial_margins_update_day) and \
                         curr_dt.hour > self._stats_hour:
                     is_initial = False
+
+                    self._prev_initial_margins_alerts = {}
 
                     sorted_stats = \
                         dict(sorted({ticker: ((curr_initial_margins[ticker] - self._prev_initial_margins[ticker]) /
@@ -532,8 +557,6 @@ class Bot:
                 time.sleep(60)
 
                 continue
-
-            logging.info("Initial margins successfully retrieved.")
 
             time.sleep(60)
 
