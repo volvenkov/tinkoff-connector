@@ -329,9 +329,16 @@ class Bot:
                 if sl_price:
                     self._place_sl(client, qty, instrument.uid, sl_price, position_side)
 
+                if instrument.__class__.__name__ == Future.__name__:
+                    executed_price = \
+                        (money_to_decimal(order_state.executed_order_price) * tick_size) / \
+                        (order_state.lots_executed * quotation_to_decimal(instrument.min_price_increment_amount))
+                else:
+                    executed_price = money_to_decimal(order_state.executed_order_price)
+
                 return f"✅ '{ticker}' {instrument.__class__.__name__} '{self._currency}' {position_side.value} "\
                        f"position opened on price " \
-                       f"{money_to_decimal(order_state.executed_order_price)} | tp: {tp_price} | sl: {sl_price} | "\
+                       f"{executed_price} | tp: {tp_price} | sl: {sl_price} | "\
                        f"margin: {start_margin:.2f} | account start margin: ~{new_account_start_margin:.2f}\n"\
                        f"{webhook_json.get('comment', '')}"
         elif webhook_type == WebhookType.RENEW_STOP_LOSS:
@@ -400,9 +407,16 @@ class Bot:
                     [OrderExecutionReportStatus.EXECUTION_REPORT_STATUS_CANCELLED,
                      OrderExecutionReportStatus.EXECUTION_REPORT_STATUS_REJECTED])
 
+                if instrument.__class__.__name__ == Future.__name__:
+                    executed_price = \
+                        (money_to_decimal(order_state.executed_order_price) * tick_size) / \
+                        (order_state.lots_executed * quotation_to_decimal(instrument.min_price_increment_amount))
+                else:
+                    executed_price = money_to_decimal(order_state.executed_order_price)
+
                 return f"✅ '{ticker}' {instrument.__class__.__name__} '{self._currency}' {position_side.value} "\
                        f"position closed on price " \
-                       f"{money_to_decimal(order_state.executed_order_price)} | orders cancelled\n"\
+                       f"{executed_price} | orders cancelled\n"\
                        f"{webhook_json.get('comment', '')}"
 
     def _wait_till_status(self,
