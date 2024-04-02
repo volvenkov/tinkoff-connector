@@ -333,6 +333,8 @@ class Bot:
                     executed_price = \
                         (money_to_decimal(order_state.executed_order_price) * tick_size) / \
                         (order_state.lots_executed * quotation_to_decimal(instrument.min_price_increment_amount))
+
+                    executed_price = Decimal(int(executed_price / tick_size) * tick_size)
                 else:
                     executed_price = money_to_decimal(order_state.executed_order_price)
 
@@ -411,6 +413,8 @@ class Bot:
                     executed_price = \
                         (money_to_decimal(order_state.executed_order_price) * tick_size) / \
                         (order_state.lots_executed * quotation_to_decimal(instrument.min_price_increment_amount))
+
+                    executed_price = Decimal(int(executed_price / tick_size) * tick_size)
                 else:
                     executed_price = money_to_decimal(order_state.executed_order_price)
 
@@ -552,12 +556,21 @@ class Bot:
                     logging.info(f"Stats 24h: {sorted_stats}")
 
                     if len(sorted_stats) <= 5:
-                        self._tg_logger.send_tg("Stats 24h\n" + "\n".join(f"{k}: {v}" for k, v in sorted_stats.items()))
+                        self._tg_logger.send_tg(
+                            "Stats 24h\n" + "\n".join(
+                                f"'{k}' '{self._instruments[k][self._currency].name}' "
+                                f"{self._prev_initial_margins[k]:.2f} -> {curr_initial_margins[k]:.2f} "
+                                f"{v:.2f}"
+                                for k, v in sorted_stats.items()))
                     else:
                         filename = "stats.txt"
 
                         with open(filename, "w", encoding="utf-8") as f:
-                            f.write("\n".join(f"{k}={v}" for k, v in sorted_stats.items()))
+                            f.write("\n".join(
+                                f"'{k}' '{self._instruments[k][self._currency].name}' "
+                                f"{self._prev_initial_margins[k]:.2f} -> {curr_initial_margins[k]:.2f} "
+                                f"{v:.2f}"
+                                for k, v in sorted_stats.items()))
 
                         self._tg_logger.send_tg_doc("Stats 24h", filename)
 
