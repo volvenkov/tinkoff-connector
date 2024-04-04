@@ -15,7 +15,7 @@ tickers_filename = "tickers.txt"
 
 log_step_perc = 5.0
 
-windows_str = ["22:36-22:39"]  # UTC
+windows_str = ["22:36:00-22:39:00"]  # UTC
 stats_hour = 19  # UTC
 
 ip_whitelist = \
