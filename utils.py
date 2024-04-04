@@ -138,12 +138,12 @@ def get_utc_time_windows(windows_str):
 
         start_dt = utc_now.replace(hour=int(start.split(":")[0]),
                                    minute=int(start.split(":")[1]),
-                                   second=0,
+                                   second=int(start.split(":")[2]),
                                    microsecond=0)
 
         end_dt = utc_now.replace(hour=int(end.split(":")[0]),
                                  minute=int(end.split(":")[1]),
-                                 second=0,
+                                 second=int(start.split(":")[2]),
                                  microsecond=0)
 
         if end_dt <= start_dt:

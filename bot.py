@@ -516,7 +516,7 @@ class Bot:
                     self._prev_initial_margins = curr_initial_margins
                     self._prev_initial_margins_update_day = curr_dt.day
 
-                    if curr_dt.hour > self._stats_hour:
+                    if curr_dt.hour >= self._stats_hour:
                         is_initial = False
                 else:
                     for ticker, initial_margin in curr_initial_margins.items():
@@ -538,10 +538,11 @@ class Bot:
                             self._prev_initial_margins_alerts[ticker] = dev_perc
 
                             self._tg_logger.send_tg(
-                                f"Initial margin: {ticker} {initial_margin} -> {curr_initial_margin} | {dev_perc}%")
+                                f"Initial margin: {ticker} {initial_margin:.2f}% -> {curr_initial_margin:.2f}% | "
+                                f"delta: {dev_perc}%")
 
                 if (is_initial or curr_dt.day != self._prev_initial_margins_update_day) and \
-                        curr_dt.hour > self._stats_hour:
+                        curr_dt.hour >= self._stats_hour:
                     is_initial = False
 
                     self._prev_initial_margins_alerts = {}
@@ -559,8 +560,8 @@ class Bot:
                         self._tg_logger.send_tg(
                             "Stats 24h\n" + "\n".join(
                                 f"'{k}' '{self._instruments[k][self._currency].name}' "
-                                f"{self._prev_initial_margins[k]:.2f} -> {curr_initial_margins[k]:.2f} "
-                                f"{v:.2f}"
+                                f"{self._prev_initial_margins[k]:.2f}% -> {curr_initial_margins[k]:.2f}% "
+                                f"Δ {v:.2f}"
                                 for k, v in sorted_stats.items()))
                     else:
                         filename = "stats.txt"
@@ -568,8 +569,8 @@ class Bot:
                         with open(filename, "w", encoding="utf-8") as f:
                             f.write("\n".join(
                                 f"'{k}' '{self._instruments[k][self._currency].name}' "
-                                f"{self._prev_initial_margins[k]:.2f} -> {curr_initial_margins[k]:.2f} "
-                                f"{v:.2f}"
+                                f"{self._prev_initial_margins[k]:.2f}% -> {curr_initial_margins[k]:.2f}% "
+                                f"Δ {v:.2f}"
                                 for k, v in sorted_stats.items()))
 
                         self._tg_logger.send_tg_doc("Stats 24h", filename)
@@ -597,8 +598,6 @@ class Bot:
         for item in tree.iter("item"):
             symbol = item.get("symbol")
 
-            initial_margin = Decimal(item.get("initial_margin"))
-
-            data[symbol] = initial_margin
+            data[symbol] = Decimal(item.get("initial_margin_percent"))
 
         return data
